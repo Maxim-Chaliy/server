@@ -1,4 +1,6 @@
 const Schedule = require('../models/Schedule');
+const mongoose = require('mongoose');
+
 
 // Получение расписания для конкретного студента
 exports.getScheduleByStudentId = async (req, res) => {
@@ -51,8 +53,6 @@ exports.addScheduleItem = async (req, res) => {
     try {
         const { student_id, group_id, day, date, time, duration, subject, description } = req.body;
 
-        console.log('Received data:', { student_id, group_id, day, date, time, duration, subject, description });
-
         // Проверка минимальной продолжительности
         if (duration < 30) {
             return res.status(400).json({
@@ -78,8 +78,6 @@ exports.addScheduleItem = async (req, res) => {
                 $lte: new Date(newDate.setHours(23, 59, 59, 999))
             }
         });
-
-        console.log('Existing schedules:', existingSchedules);
 
         // Функция для преобразования времени в минуты
         const toMinutes = (timeStr) => {
@@ -118,22 +116,19 @@ exports.addScheduleItem = async (req, res) => {
             subject,
             description: description || '',
             attendance: student_id ? false : null,
-            grade: null // или какое-то значение по умолчанию
+            grade: null // Добавьте это поле
         });
 
 
         const savedScheduleItem = await newScheduleItem.save();
-        console.log('Saved schedule item:', savedScheduleItem);
         res.status(201).json(savedScheduleItem);
     } catch (error) {
-        console.error('Ошибка при добавлении занятия в расписание:', error);
         res.status(500).json({
             error: 'Ошибка при добавлении занятия в расписание',
             details: error.message
         });
     }
 };
-
 
 // Вспомогательная функция для расчета времени окончания
 function calculateEndTime(startTime, duration) {
@@ -258,6 +253,7 @@ exports.updateScheduleItem = async (req, res) => {
     }
 };
 
+
 // Удаление записи из расписания
 exports.deleteScheduleItem = async (req, res) => {
     try {
@@ -329,65 +325,25 @@ function getShortDayOfWeek(date) {
     return daysOfWeek[dateObj.getDay()];
 }
 
-// Обновление оценок для групповых занятий
-exports.updateGrades = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { grades } = req.body;
-
-        const scheduleItem = await Schedule.findById(id);
-        if (!scheduleItem) {
-            return res.status(404).json({ error: 'Занятие не найдено' });
-        }
-
-        if (!scheduleItem.group_id) {
-            return res.status(400).json({ error: 'Оценки группы можно обновлять только для групповых занятий' });
-        }
-
-        // Обновляем оценки
-        scheduleItem.grades = grades;
-        scheduleItem.markModified('grades');
-        scheduleItem.updatedAt = Date.now();
-
-        const updatedItem = await scheduleItem.save();
-        res.json(updatedItem);
-    } catch (error) {
-        res.status(500).json({
-            error: 'Ошибка при обновлении оценок',
-            details: error.message
-        });
-    }
-};
-
-// Обновление оценки для индивидуального занятия
 exports.updateGrade = async (req, res) => {
     try {
         const { id } = req.params;
         const { grade } = req.body;
 
-        console.log('Received request to update grade for item:', id, 'with grade:', grade);
+        // Убедитесь, что id является допустимым ObjectId
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ error: 'Неверный идентификатор записи' });
+        }
 
-        const scheduleItem = await Schedule.findById(id);
-        if (!scheduleItem) {
-            console.error('Schedule item not found:', id);
+        const updatedItem = await Schedule.findByIdAndUpdate(
+            id,
+            { grade, updatedAt: Date.now() },
+            { new: true }
+        );
+
+        if (!updatedItem) {
             return res.status(404).json({ error: 'Занятие не найдено' });
         }
-
-        if (!scheduleItem.attendance) {
-            console.error('Cannot update grade: attendance is false for item:', id);
-            return res.status(400).json({ error: 'Оценка может быть выставлена только при наличии посещаемости' });
-        }
-
-        if (!scheduleItem.student_id) {
-            console.error('Cannot update grade: item is not an individual lesson:', id);
-            return res.status(400).json({ error: 'Индивидуальную оценку можно обновлять только для индивидуальных занятий' });
-        }
-
-        scheduleItem.grade = grade;
-        scheduleItem.updatedAt = Date.now();
-        const updatedItem = await scheduleItem.save();
-
-        console.log('Grade updated successfully for item:', updatedItem);
 
         res.json(updatedItem);
     } catch (error) {
@@ -399,28 +355,43 @@ exports.updateGrade = async (req, res) => {
     }
 };
 
-
-// В scheduleController.js
-exports.getScheduleItem = async (req, res) => {
+// Обновление оценок для группы
+exports.updateGroupGrades = async (req, res) => {
     try {
         const { id } = req.params;
-        const scheduleItem = await Schedule.findById(id);
+        const { grades } = req.body;
 
+        const scheduleItem = await Schedule.findById(id);
         if (!scheduleItem) {
             return res.status(404).json({ error: 'Занятие не найдено' });
         }
 
-        // Преобразуем grades Map в объект, если нужно
-        const result = scheduleItem.toObject();
-        if (scheduleItem.grades instanceof Map) {
-            result.grades = Object.fromEntries(scheduleItem.grades);
+        if (!scheduleItem.group_id) {
+            return res.status(400).json({
+                error: 'Это индивидуальное занятие. Используйте другой метод'
+            });
         }
 
-        res.json(result);
+        scheduleItem.grade_group = grades;
+        scheduleItem.markModified('grade_group');
+        scheduleItem.updatedAt = Date.now();
+        const updatedItem = await scheduleItem.save();
+
+        res.json(updatedItem);
     } catch (error) {
         res.status(500).json({
-            error: 'Ошибка при получении занятия',
+            error: 'Ошибка при обновлении оценок группы',
             details: error.message
         });
+    }
+};
+
+// В scheduleController.js
+exports.getAllStats = async (req, res) => {
+    try {
+        const stats = await Schedule.find({}); // Получаем все записи
+        res.json(stats);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
 };
